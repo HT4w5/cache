@@ -93,7 +93,7 @@ func writePayload(dst, k, v []byte) {
 	copy(dst[4+len(k):], v)
 }
 
-func (r *ring) get(dst, k []byte, h uint64) ([]byte, bool) {
+func (r *ring) get(dst, k []byte, h uint64, copyValue bool) ([]byte, bool) {
 	var wrapBit bool
 	r.mu.RLock()
 	idx, ok := r.idxMap[h]
@@ -137,12 +137,17 @@ func (r *ring) get(dst, k []byte, h uint64) ([]byte, bool) {
 		}
 
 		idx += kLen
-		if dst == nil || len(dst) < int(vLen) {
-			dst = make([]byte, vLen)
+		if copyValue {
+			if dst == nil || len(dst) < int(vLen) {
+				dst = make([]byte, vLen)
+			}
+			copy(dst, shard.data[idx:idx+vLen])
+			shard.mu.RUnlock()
+			return dst[:vLen], true
+		} else {
+			shard.mu.RUnlock()
+			return nil, true
 		}
-		copy(dst, shard.data[idx:idx+vLen])
-		shard.mu.RUnlock()
-		return dst[:vLen], true
 	}
 
 	// Invalid mapping
@@ -190,7 +195,9 @@ func (r *ring) reset() {
 	for i := range len(r.shards) {
 		s := &r.shards[i]
 		s.mu.Lock()
-		shardPool.Put(s.data)
+		if s.data != nil && cap(s.data) != shardSize {
+			shardPool.Put(s.data)
+		}
 		s.data = nil
 		s.mu.Unlock()
 	}
