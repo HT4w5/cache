@@ -9,8 +9,8 @@ import (
 	"github.com/zeebo/xxh3"
 )
 
-// TestSmallRing tests a ring with only one shard
-func TestSmallRing(t *testing.T) {
+// Tests a ring with only one shard
+func TestRingSmall(t *testing.T) {
 	r := &ring{}
 	r.init(shardSize) // One shard
 
@@ -23,7 +23,7 @@ func TestSmallRing(t *testing.T) {
 	r.set(key, value, h)
 
 	// Try to get it back
-	got, ok := r.get(nil, key, h)
+	got, ok := r.get(nil, key, h, true)
 	if !ok {
 		t.Fatal("Failed to get key that was just set")
 	}
@@ -34,7 +34,7 @@ func TestSmallRing(t *testing.T) {
 
 	// Test with provided buffer
 	dst := make([]byte, len(value))
-	got, ok = r.get(dst, key, h)
+	got, ok = r.get(dst, key, h, true)
 	if !ok {
 		t.Fatal("Failed to get key that was just set with buffer")
 	}
@@ -48,21 +48,21 @@ func TestSmallRing(t *testing.T) {
 	// Test getting non-existent key
 	nonExistentKey := []byte("non-existent")
 	h2 := xxh3.Hash(nonExistentKey)
-	_, ok = r.get(nil, nonExistentKey, h2)
+	_, ok = r.get(nil, nonExistentKey, h2, true)
 	if ok {
 		t.Fatal("Should not get non-existent key")
 	}
 
 	// Test delete
 	r.del(h)
-	_, ok = r.get(nil, key, h)
+	_, ok = r.get(nil, key, h, true)
 	if ok {
 		t.Fatal("Should not get deleted key")
 	}
 }
 
 // Helper function to test setting and getting n items
-func testSetGetN(t *testing.T, r *ring, n int) {
+func testRingSetGetN(t *testing.T, r *ring, n int) {
 	// Create n unique keys and values
 	keys := make([][]byte, n)
 	values := make([][]byte, n)
@@ -86,7 +86,7 @@ func testSetGetN(t *testing.T, r *ring, n int) {
 	// Get all items and verify
 	for i := 0; i < n; i++ {
 		dst := make([]byte, len(values[i]))
-		got, ok := r.get(dst, keys[i], hashes[i])
+		got, ok := r.get(dst, keys[i], hashes[i], true)
 		if !ok {
 			t.Errorf("Failed to get key %d that was just set", i)
 			continue
@@ -101,7 +101,7 @@ func testSetGetN(t *testing.T, r *ring, n int) {
 	rand.Read(nonExistentKey)
 	h := xxh3.Hash(nonExistentKey)
 	dst := make([]byte, 32)
-	_, ok := r.get(dst, nonExistentKey, h)
+	_, ok := r.get(dst, nonExistentKey, h, true)
 	if ok {
 		t.Error("Should not get non-existent key")
 	}
@@ -124,7 +124,7 @@ func TestSerialRing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &ring{}
 			r.init(tc.maxBytes)
-			testSetGetN(t, r, tc.numItems)
+			testRingSetGetN(t, r, tc.numItems)
 		})
 	}
 }
@@ -177,7 +177,7 @@ func TestConcurrentRing(t *testing.T) {
 			end := start + itemsPerWorker
 			for i := start; i < end; i++ {
 				dst := make([]byte, len(values[i]))
-				got, ok := r.get(dst, keys[i], hashes[i])
+				got, ok := r.get(dst, keys[i], hashes[i], true)
 				if !ok {
 					t.Errorf("Worker %d: failed to get key %d", workerID, i)
 				}
@@ -202,7 +202,7 @@ func TestConcurrentRing(t *testing.T) {
 					r.del(hashes[i])
 					// Try to get deleted item
 					dst := make([]byte, len(values[i]))
-					_, ok := r.get(dst, keys[i], hashes[i])
+					_, ok := r.get(dst, keys[i], hashes[i], true)
 					if ok {
 						t.Errorf("Worker %d: should not get deleted key %d", workerID, i)
 					}
@@ -212,7 +212,7 @@ func TestConcurrentRing(t *testing.T) {
 						r.set(keys[i], values[i], hashes[i])
 					} else {
 						dst := make([]byte, len(values[i]))
-						_, _ = r.get(dst, keys[i], hashes[i])
+						_, _ = r.get(dst, keys[i], hashes[i], true)
 					}
 				}
 			}
@@ -257,7 +257,7 @@ func TestRingWrap(t *testing.T) {
 	foundCount := 0
 	for i := range totalItems {
 		dst := make([]byte, len(values[i]))
-		got, ok := r.get(dst, keys[i], hashes[i])
+		got, ok := r.get(dst, keys[i], hashes[i], true)
 		if ok {
 			foundCount++
 			if !bytes.Equal(got, values[i]) {
@@ -282,7 +282,7 @@ func TestRingWrap(t *testing.T) {
 
 	r.set(newKey, newValue, newHash)
 	dst := make([]byte, len(newValue))
-	got, ok := r.get(dst, newKey, newHash)
+	got, ok := r.get(dst, newKey, newHash, true)
 	if !ok {
 		t.Error("Failed to get new item after wrap")
 	}
@@ -292,7 +292,7 @@ func TestRingWrap(t *testing.T) {
 }
 
 // TestLargestPossibleKeyValue tests the maximum size key/value that can be stored
-func TestLargestPossibleKeyValue(t *testing.T) {
+func TestRingLargestPossibleKeyValue(t *testing.T) {
 	r := &ring{}
 	r.init(4 * shardSize)
 
@@ -306,7 +306,7 @@ func TestLargestPossibleKeyValue(t *testing.T) {
 
 	r.set(key, value, h)
 	dst := make([]byte, len(value))
-	got, ok := r.get(dst, key, h)
+	got, ok := r.get(dst, key, h, true)
 	if !ok {
 		t.Error("Failed to get max size key with empty value")
 	}
@@ -322,7 +322,7 @@ func TestLargestPossibleKeyValue(t *testing.T) {
 
 	r.set(key2, value2, h2)
 	dst2 := make([]byte, len(value2))
-	got2, ok := r.get(dst2, key2, h2)
+	got2, ok := r.get(dst2, key2, h2, true)
 	if !ok {
 		t.Error("Failed to get empty key with max size value")
 	}
@@ -341,7 +341,7 @@ func TestLargestPossibleKeyValue(t *testing.T) {
 
 	r.set(key3, value3, h3)
 	dst3 := make([]byte, len(value3))
-	got3, ok := r.get(dst3, key3, h3)
+	got3, ok := r.get(dst3, key3, h3, true)
 	if !ok {
 		t.Error("Failed to get large key/value pair")
 	}
@@ -359,7 +359,7 @@ func TestLargestPossibleKeyValue(t *testing.T) {
 
 	// Should not be able to retrieve
 	dst4 := make([]byte, len(tooLargeValue))
-	_, ok = r.get(dst4, tooLargeKey, h4)
+	_, ok = r.get(dst4, tooLargeKey, h4, true)
 	if ok {
 		t.Error("Should not get too large key")
 	}
@@ -496,7 +496,7 @@ func TestRingIterator(t *testing.T) {
 	}
 }
 
-func TestReset(t *testing.T) {
+func TestRingReset(t *testing.T) {
 	r := &ring{}
 	r.init(4 * shardSize)
 
