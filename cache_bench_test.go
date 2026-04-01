@@ -5,9 +5,43 @@ import (
 	"testing"
 )
 
+var numRings = []int{512}
+
 func BenchmarkCacheSet(b *testing.B) {
+	for _, n := range numRings {
+		b.Run(fmt.Sprintf("NumRings-%d", n), func(b *testing.B) {
+			benchmarkCacheSet(b, n)
+		})
+	}
+}
+
+func BenchmarkCacheGet(b *testing.B) {
+	for _, n := range numRings {
+		b.Run(fmt.Sprintf("NumRings-%d", n), func(b *testing.B) {
+			benchmarkCacheGet(b, n)
+		})
+	}
+}
+
+func BenchmarkCacheHas(b *testing.B) {
+	for _, n := range numRings {
+		b.Run(fmt.Sprintf("NumRings-%d", n), func(b *testing.B) {
+			benchmarkCacheHas(b, n)
+		})
+	}
+}
+
+func BenchmarkCacheSetGet(b *testing.B) {
+	for _, n := range numRings {
+		b.Run(fmt.Sprintf("NumRings-%d", n), func(b *testing.B) {
+			benchmarkCacheSetGet(b, n)
+		})
+	}
+}
+
+func benchmarkCacheSet(b *testing.B, numRings int) {
 	const items = 1 << 16
-	c := New(WithSize(12*items), WithNumRings(512))
+	c := New(WithSize(12*1024*items), WithNumRings(numRings))
 	defer c.Reset()
 	b.ReportAllocs()
 	b.SetBytes(items)
@@ -26,9 +60,9 @@ func BenchmarkCacheSet(b *testing.B) {
 	})
 }
 
-func BenchmarkCacheGet(b *testing.B) {
+func benchmarkCacheGet(b *testing.B, numRings int) {
 	const items = 1 << 16
-	c := New(WithSize(12*items), WithNumRings(512))
+	c := New(WithSize(12*1024*items), WithNumRings(numRings))
 	defer c.Reset()
 	k := []byte("\x00\x00\x00\x00")
 	v := []byte("xyza")
@@ -60,9 +94,9 @@ func BenchmarkCacheGet(b *testing.B) {
 	})
 }
 
-func BenchmarkCacheHas(b *testing.B) {
+func benchmarkCacheHas(b *testing.B, numRings int) {
 	const items = 1 << 16
-	c := New(WithSize(12*items), WithNumRings(512))
+	c := New(WithSize(12*1024*items), WithNumRings(numRings))
 	defer c.Reset()
 	k := []byte("\x00\x00\x00\x00")
 	for range items {
@@ -91,9 +125,9 @@ func BenchmarkCacheHas(b *testing.B) {
 	})
 }
 
-func BenchmarkCacheSetGet(b *testing.B) {
+func benchmarkCacheSetGet(b *testing.B, numRings int) {
 	const items = 1 << 16
-	c := New(WithSize(12*items), WithNumRings(512))
+	c := New(WithSize(12*1024*items), WithNumRings(numRings))
 	defer c.Reset()
 	b.ReportAllocs()
 	b.SetBytes(2 * items)
@@ -116,7 +150,7 @@ func BenchmarkCacheSetGet(b *testing.B) {
 				}
 				buf, _ = c.HasGet(nil, k)
 				if string(buf) != string(v) {
-					panic(fmt.Errorf("BUG: invalid value obtained; got %q; want %q", buf, v))
+					b.Fatalf("BUG: invalid value obtained; got %q; want %q", buf, v)
 				}
 			}
 		}

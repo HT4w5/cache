@@ -528,3 +528,43 @@ func TestRingReset(t *testing.T) {
 		t.Error("ring should be reset")
 	}
 }
+
+func TestRingSetGetConcurrent(t *testing.T) {
+	payloadLen := 12 // kvLen + k + v
+	items := 1 << 16
+	workers := 8
+	var r ring
+	r.init(uint64(payloadLen * items * workers))
+	defer r.reset()
+
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			testRingSetGet(t, &r, items)
+		})
+	}
+	wg.Wait()
+}
+
+func testRingSetGet(t *testing.T, r *ring, items int) {
+	k := []byte("\x00\x00\x00\x00")
+	v := []byte("xyza")
+	var buf []byte
+	for range items {
+		k[0]++
+		if k[0] == 0 {
+			k[1]++
+		}
+		r.set(k, v, xxh3.Hash(k))
+	}
+	for range items {
+		k[0]++
+		if k[0] == 0 {
+			k[1]++
+		}
+		buf, _ = r.get(nil, k, xxh3.Hash(k), true)
+		if !bytes.Equal(buf, v) {
+			t.Errorf("get value mismatch; got %q; want %q", buf, v)
+		}
+	}
+}
