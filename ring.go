@@ -14,7 +14,7 @@ const (
 type ring struct {
 	mu     sync.RWMutex
 	idxMap map[uint64]uint64
-	shards []shard
+	shards [][]byte
 
 	// State params
 	wrapBit bool
@@ -31,7 +31,7 @@ func (r *ring) init(size uint64) {
 	numShards := (size + shardSize - 1) / shardSize // total size is integer multiple of shardSize that is just above provided
 	r.mu.Lock()
 	r.size = uint64(numShards) * shardSize
-	r.shards = make([]shard, numShards)
+	r.shards = make([][]byte, numShards)
 	r.idxMap = make(map[uint64]uint64)
 	r.mu.Unlock()
 }
@@ -42,6 +42,7 @@ func (r *ring) set(k, v []byte, h uint64) {
 		return
 	}
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	startIdx := r.idx
 	endIdx := startIdx + payloadSize
 	startShardIdx := startIdx / shardSize
@@ -74,15 +75,14 @@ func (r *ring) set(k, v []byte, h uint64) {
 	r.idx = endIdx
 
 	// Write payload
-	shard := &r.shards[startShardIdx]
-	shard.mu.Lock()
-	r.mu.Unlock()
-	if shard.data == nil {
-		shard.data = shardPool.Get().([]byte)[:shardSize:shardSize]
+	srd := r.shards[startShardIdx]
+
+	if srd == nil {
+		srd = shardPool.Get().([]byte)[:shardSize:shardSize]
+		r.shards[startShardIdx] = srd
 	}
 	idx := startIdx % shardSize
-	writePayload(shard.data[idx:], k, v)
-	shard.mu.Unlock()
+	writePayload(srd[idx:], k, v)
 }
 
 func writePayload(dst, k, v []byte) {
@@ -97,10 +97,10 @@ func writePayload(dst, k, v []byte) {
 func (r *ring) get(dst, k []byte, h uint64, copyValue bool) ([]byte, bool) {
 	var wrapBit bool
 	r.mu.RLock()
+	defer r.mu.RUnlock()
 	idx, ok := r.idxMap[h]
 	if !ok {
 		// No idx mapping
-		r.mu.RUnlock()
 		return nil, false
 	}
 
@@ -116,24 +116,20 @@ func (r *ring) get(dst, k []byte, h uint64, copyValue bool) ([]byte, bool) {
 			return nil, false
 		}
 		idx %= shardSize
-		shard := &r.shards[shardIdx]
-		shard.mu.RLock()
-		r.mu.RUnlock()
+		srd := r.shards[shardIdx]
 
-		src := shard.data[idx:]
+		src := srd[idx:]
 
 		kLen := (uint64(src[0]) << 8) | uint64(src[1])
 		vLen := (uint64(src[2]) << 8) | uint64(src[3])
 		if idx+kLen+vLen+4 > shardSize {
 			// Corrupt key/value length
-			shard.mu.RUnlock()
 			return nil, false
 		}
 
 		idx += 4
-		if !bytes.Equal(k, shard.data[idx:idx+kLen]) {
+		if !bytes.Equal(k, srd[idx:idx+kLen]) {
 			// Collision
-			shard.mu.RUnlock()
 			return nil, false
 		}
 
@@ -142,17 +138,14 @@ func (r *ring) get(dst, k []byte, h uint64, copyValue bool) ([]byte, bool) {
 			if dst == nil || len(dst) < int(vLen) {
 				dst = make([]byte, vLen)
 			}
-			copy(dst, shard.data[idx:idx+vLen])
-			shard.mu.RUnlock()
+			copy(dst, srd[idx:idx+vLen])
 			return dst[:vLen], true
 		} else {
-			shard.mu.RUnlock()
 			return nil, true
 		}
 	}
 
 	// Invalid mapping
-	r.mu.RUnlock()
 	return nil, false
 }
 
@@ -194,13 +187,11 @@ func (r *ring) reset() {
 	defer r.mu.Unlock()
 
 	for i := range len(r.shards) {
-		s := &r.shards[i]
-		s.mu.Lock()
-		if s.data != nil && cap(s.data) != shardSize {
-			shardPool.Put(s.data)
+		s := r.shards[i]
+		if s != nil && cap(s) != shardSize {
+			shardPool.Put(s)
 		}
-		s.data = nil
-		s.mu.Unlock()
+		s = nil
 	}
 
 	clear(r.idxMap)
@@ -254,17 +245,15 @@ func (it *ringIter) getNext(dst []byte) ([]byte, bool) {
 				continue
 			}
 			idx %= shardSize
-			shard := &it.r.shards[shardIdx]
-			shard.mu.RLock()
-			it.r.mu.RUnlock()
+			srd := it.r.shards[shardIdx]
 
-			src := shard.data[idx:]
+			src := srd[idx:]
 
 			kLen := (uint64(src[0]) << 8) | uint64(src[1])
 			vLen := (uint64(src[2]) << 8) | uint64(src[3])
 			if idx+kLen+vLen+4 > shardSize {
 				// Corrupt key/value length
-				shard.mu.RUnlock()
+				it.r.mu.RUnlock()
 				continue
 			}
 
@@ -274,8 +263,8 @@ func (it *ringIter) getNext(dst []byte) ([]byte, bool) {
 			if dst == nil || len(dst) < int(vLen) {
 				dst = make([]byte, vLen)
 			}
-			copy(dst, shard.data[idx:idx+vLen])
-			shard.mu.RUnlock()
+			copy(dst, srd[idx:idx+vLen])
+			it.r.mu.RUnlock()
 			return dst[:vLen], true
 		}
 		it.r.mu.RUnlock()

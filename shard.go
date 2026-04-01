@@ -11,8 +11,3 @@ var shardPool = sync.Pool{
 		return make([]byte, shardSize)
 	},
 }
-
-type shard struct {
-	mu   sync.RWMutex
-	data []byte
-}
