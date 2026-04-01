@@ -50,11 +50,12 @@ func (r *ring) set(k, v []byte, h uint64) {
 	// excluding the case where it ends exactly at a shard boundary
 	if endShardIdx > startShardIdx && endIdx%shardSize != 0 {
 		if endShardIdx >= uint64(len(r.shards)) { // Wrap ring
+			// Perform vacuum
+			r.vacuum()
 			startIdx = 0
 			startShardIdx = 0
 			endIdx = payloadSize
 			r.wrapBit = !r.wrapBit
-			r.vaccum()
 		} else { // Move to next shard
 			startIdx = endShardIdx * shardSize
 			endIdx = startIdx + payloadSize
@@ -162,7 +163,7 @@ func (r *ring) del(h uint64) {
 }
 
 // Caller is responsible for (un)locking the mutex
-func (r *ring) vaccum() {
+func (r *ring) vacuum() {
 	var valid int
 	for _, idx := range r.idxMap {
 		wrapBit := (idx >> ringIdxBits) == 1
