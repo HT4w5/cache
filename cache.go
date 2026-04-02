@@ -12,7 +12,10 @@ type Cache struct {
 }
 
 func New(opts ...func(*Cache)) *Cache {
-	c := &Cache{}
+	c := &Cache{
+		numRings: 512,
+		size:     1,
+	}
 
 	for _, opt := range opts {
 		opt(c)
