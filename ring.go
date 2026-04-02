@@ -2,6 +2,7 @@ package cache
 
 import (
 	"bytes"
+	"maps"
 	"sync"
 )
 
@@ -9,6 +10,8 @@ const (
 	ringIdxBits       = 63
 	maxRingSize       = 1 << ringIdxBits
 	payloadHeaderSize = 4
+
+	vacuumFactor = 2
 )
 
 type ring struct {
@@ -135,10 +138,8 @@ func (r *ring) get(dst, k []byte, h uint64, copyValue bool) ([]byte, bool) {
 
 		idx += kLen
 		if copyValue {
-			if dst == nil || len(dst) < int(vLen) {
-				dst = make([]byte, vLen)
-			}
-			copy(dst, srd[idx:idx+vLen])
+			dst = dst[:0]
+			dst = append(dst, srd[idx:idx+vLen]...)
 			return dst[:vLen], true
 		} else {
 			return nil, true
@@ -157,28 +158,17 @@ func (r *ring) del(h uint64) {
 
 // Caller is responsible for (un)locking the mutex
 func (r *ring) vacuum() {
-	var valid int
-	for _, idx := range r.idxMap {
+	cap := len(r.idxMap)
+	maps.DeleteFunc(r.idxMap, func(h uint64, idx uint64) bool {
 		wrapBit := (idx >> ringIdxBits) == 1
 		idx &= (1 << ringIdxBits) - 1
-		if wrapBit == r.wrapBit && idx < r.idx || wrapBit != r.wrapBit && idx >= r.idx {
-			// Valid
-			valid++
-		}
-	}
 
-	if valid < len(r.idxMap) {
+		return !(wrapBit == r.wrapBit && idx < r.idx || wrapBit != r.wrapBit && idx >= r.idx) // Invalid entries
+	})
+
+	if len(r.idxMap)*vacuumFactor <= cap {
 		// Shrink map by re-creating
-		newIdxMap := make(map[uint64]uint64)
-		for h, idx := range r.idxMap {
-			wrapBit := (idx >> ringIdxBits) == 1
-			idx &= (1 << ringIdxBits) - 1
-			if wrapBit == r.wrapBit && idx < r.idx || wrapBit != r.wrapBit && idx >= r.idx {
-				// Valid
-				newIdxMap[h] = idx
-			}
-		}
-		r.idxMap = newIdxMap
+		r.idxMap = maps.Clone(r.idxMap)
 	}
 }
 
@@ -260,10 +250,8 @@ func (it *ringIter) getNext(dst []byte) ([]byte, bool) {
 			idx += 4
 
 			idx += kLen
-			if dst == nil || len(dst) < int(vLen) {
-				dst = make([]byte, vLen)
-			}
-			copy(dst, srd[idx:idx+vLen])
+			dst = dst[:0]
+			dst = append(dst, srd[idx:idx+vLen]...)
 			it.r.mu.RUnlock()
 			return dst[:vLen], true
 		}
