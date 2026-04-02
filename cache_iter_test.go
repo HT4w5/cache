@@ -15,7 +15,7 @@ import (
 )
 
 // These tests are modified from
-// https://github.com/allegro/bigcache/blob/main/iterator_test.go,
+// https://github.com/allegro/bigcache/blob/532eb6410aefb749509084c74f56b8313e200f4a/iterator_test.go,
 // licensed under The Apache License Version 2.0
 // http://www.apache.org/licenses/LICENSE-2.0
 //
