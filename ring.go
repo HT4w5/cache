@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"maps"
 	"sync"
+
+	"github.com/zeebo/xxh3"
 )
 
 const (
@@ -50,21 +52,22 @@ func (r *ring) set(k, v []byte, h uint64) {
 	endIdx := startIdx + payloadSize
 	startShardIdx := startIdx / shardSize
 	endShardIdx := endIdx / shardSize
-	// Check if payload spans across shards,
-	// excluding the case where it ends exactly at a shard boundary
-	if endShardIdx > startShardIdx && endIdx%shardSize != 0 {
-		if endShardIdx >= uint64(len(r.shards)) { // Wrap ring
-			// Perform vacuum
-			r.vacuum()
-			startIdx = 0
-			startShardIdx = 0
-			endIdx = payloadSize
-			r.wrapBit = !r.wrapBit
-		} else { // Move to next shard
-			startIdx = endShardIdx * shardSize
-			endIdx = startIdx + payloadSize
-			startShardIdx = endShardIdx
-		}
+	// Check if idx exceeds ring size
+	if endShardIdx >= uint64(len(r.shards)) { // Wrap ring
+		// Perform vacuum
+		r.vacuum()
+		startIdx = 0
+		startShardIdx = 0
+		endIdx = payloadSize
+		r.wrapBit = !r.wrapBit
+	} else if endShardIdx > startShardIdx && endIdx%shardSize != 0 {
+		// Check if payload spans across shards,
+		// excluding the case where it ends exactly at a shard boundary
+		//
+		// Move to next shard
+		startIdx = endShardIdx * shardSize
+		endIdx = startIdx + payloadSize
+		startShardIdx = endShardIdx
 	}
 
 	// Write map
@@ -196,22 +199,34 @@ func (r *ring) iterator() *ringIter {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	it := &ringIter{
-		r:     r,
-		idxes: make([]uint64, 0, len(r.idxMap)),
-		i:     -1,
+		r: r,
+		idxPairs: make([]struct {
+			hash uint64
+			idx  uint64
+		}, 0, len(r.idxMap)),
+		i: -1,
 	}
 
-	for _, idx := range r.idxMap {
-		it.idxes = append(it.idxes, idx)
+	for h, idx := range r.idxMap {
+		it.idxPairs = append(it.idxPairs, struct {
+			hash uint64
+			idx  uint64
+		}{
+			hash: h,
+			idx:  idx,
+		})
 	}
 
 	return it
 }
 
 type ringIter struct {
-	r     *ring
-	idxes []uint64
-	i     int64
+	r        *ring
+	idxPairs []struct {
+		hash uint64
+		idx  uint64
+	}
+	i int64
 }
 
 func (it *ringIter) getNext(kDst, vDst []byte) ([]byte, []byte, bool) {
@@ -220,11 +235,11 @@ func (it *ringIter) getNext(kDst, vDst []byte) ([]byte, []byte, bool) {
 
 	for {
 		it.i++
-		if it.i >= int64(len(it.idxes)) {
+		if it.i >= int64(len(it.idxPairs)) {
 			return nil, nil, false
 		}
 
-		idx := it.idxes[it.i]
+		hash, idx := it.idxPairs[it.i].hash, it.idxPairs[it.i].idx
 		wrapBit := (idx >> ringIdxBits) == 1
 		idx &= (1 << ringIdxBits) - 1
 
@@ -248,6 +263,12 @@ func (it *ringIter) getNext(kDst, vDst []byte) ([]byte, []byte, bool) {
 			}
 
 			idx += 4
+			// Verify hash
+			if hash != xxh3.Hash(srd[idx:idx+kLen]) {
+				// Overwritten
+				continue
+			}
+
 			kDst = kDst[:0]
 			kDst = append(kDst, srd[idx:idx+kLen]...)
 

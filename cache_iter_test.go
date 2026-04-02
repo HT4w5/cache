@@ -134,7 +134,7 @@ func TestParallelSetAndIteration(t *testing.T) {
 		}
 	})
 
-	go func() {
+	wg.Go(func() {
 		defer func() {
 			err := recover()
 			// no panic
@@ -159,7 +159,7 @@ func TestParallelSetAndIteration(t *testing.T) {
 				}
 			}
 		}
-	}()
+	})
 
 	wg.Wait()
 }

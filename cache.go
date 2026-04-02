@@ -139,9 +139,12 @@ func (c *Cache) Iterator() *Iterator {
 		c:       c,
 		ringIdx: -1,
 		ri: &ringIter{
-			r:     &ring{},
-			idxes: []uint64{}, // getNext() will return false on first call
-			i:     2,
+			r: &ring{},
+			idxPairs: []struct {
+				hash uint64
+				idx  uint64
+			}{}, // getNext() will return false on first call
+			i: 2,
 		},
 	}
 

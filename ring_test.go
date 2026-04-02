@@ -3,6 +3,7 @@ package cache
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/binary"
 	"sync"
 	"testing"
 
@@ -570,5 +571,45 @@ func testRingSetGet(t *testing.T, r *ring, items int) {
 		if !bytes.Equal(buf, v) {
 			t.Errorf("get value mismatch; got %q; want %q", buf, v)
 		}
+	}
+}
+
+func TestRingIteratorKeyVerify(t *testing.T) {
+	var r ring
+	r.init(1) // 1 shard, 64KB ring
+
+	key := func(i int) []byte {
+		// 1024 bytes
+		b := make([]byte, 1024)
+		binary.BigEndian.AppendUint64(b[:0], uint64(i))
+		return b
+	}
+
+	value := make([]byte, 1020)
+
+	// Insert keys
+
+	for i := range 32 { // Should wrap around and overwrite first key
+		k := key(i)
+		r.set(k, value, xxh3.Hash(k))
+	}
+
+	expected := make(map[uint64]struct{}, 32)
+
+	for i := 1; i < 32; i++ {
+		expected[xxh3.Hash(key(i))] = struct{}{}
+	}
+
+	it := r.iterator()
+	for {
+		k, _, ok := it.getNext(nil, nil)
+		if !ok {
+			break
+		}
+		delete(expected, xxh3.Hash(k))
+	}
+
+	if len(expected) != 0 {
+		t.Error("iterator retrieved invalid key")
 	}
 }
