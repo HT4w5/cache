@@ -396,15 +396,15 @@ func TestRingIterator(t *testing.T) {
 	count := 0
 
 	for {
-		got, ok := it.getNext(nil)
+		key, value, ok := it.getNext(nil, nil)
 		if !ok {
 			break
 		}
 		count++
 
 		found := false
-		for i, value := range values {
-			if bytes.Equal(got, value) {
+		for i, expectedValue := range values {
+			if bytes.Equal(value, expectedValue) && bytes.Equal(key, keys[i]) {
 				keyStr := string(keys[i])
 				if visited[keyStr] {
 					t.Errorf("Iterator returned duplicate value for key %d", i)
@@ -415,7 +415,7 @@ func TestRingIterator(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Error("Iterator returned value not in original set")
+			t.Error("Iterator returned key/value not in original set")
 		}
 	}
 
@@ -429,20 +429,24 @@ func TestRingIterator(t *testing.T) {
 	count2 := 0
 
 	for {
-		buf := make([]byte, 32)
-		got, ok := it2.getNext(buf)
+		keyBuf := make([]byte, 16)
+		valueBuf := make([]byte, 32)
+		key, value, ok := it2.getNext(keyBuf, valueBuf)
 		if !ok {
 			break
 		}
 		count2++
 
-		if &got[0] != &buf[0] {
-			t.Error("Iterator should return provided buffer when large enough")
+		if &value[0] != &valueBuf[0] {
+			t.Error("Iterator should return provided value buffer when large enough")
+		}
+		if &key[0] != &keyBuf[0] {
+			t.Error("Iterator should return provided key buffer when large enough")
 		}
 
 		found := false
-		for i, value := range values {
-			if bytes.Equal(got, value) {
+		for i, expectedValue := range values {
+			if bytes.Equal(value, expectedValue) && bytes.Equal(key, keys[i]) {
 				keyStr := string(keys[i])
 				if visited2[keyStr] {
 					t.Errorf("Iterator returned duplicate value for key %d", i)
@@ -453,7 +457,7 @@ func TestRingIterator(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Error("Iterator returned value not in original set")
+			t.Error("Iterator returned key/value not in original set")
 		}
 	}
 
@@ -465,7 +469,7 @@ func TestRingIterator(t *testing.T) {
 	r2 := &ring{}
 	r2.init(shardSize)
 	it3 := r2.iterator()
-	if _, ok := it3.getNext(nil); ok {
+	if _, _, ok := it3.getNext(nil, nil); ok {
 		t.Error("Iterator should return false on empty ring")
 	}
 
@@ -484,7 +488,7 @@ func TestRingIterator(t *testing.T) {
 	it4 := r3.iterator()
 	it4Count := 0
 	for {
-		_, ok := it4.getNext(nil)
+		_, _, ok := it4.getNext(nil, nil)
 		if !ok {
 			break
 		}
@@ -524,7 +528,7 @@ func TestRingReset(t *testing.T) {
 	r.reset()
 
 	it := r.iterator()
-	if _, ok := it.getNext(nil); ok {
+	if _, _, ok := it.getNext(nil, nil); ok {
 		t.Error("ring should be reset")
 	}
 }

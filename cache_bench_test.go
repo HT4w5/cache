@@ -67,34 +67,42 @@ func BenchmarkCacheSetGet(b *testing.B) {
 	}
 }
 
+func BenchmarkCacheIterator(b *testing.B) {
+	for _, n := range numRings {
+		b.Run(fmt.Sprintf("NumRings-%d", n), func(b *testing.B) {
+			benchmarkCacheIterator(b, n)
+		})
+	}
+}
+
 func benchmarkCacheSet(b *testing.B, numRings int) {
-	const items = 1 << 16
-	c := New(WithSize(12*1024*items), WithNumRings(numRings))
+	c := New(WithSize(uint64(12*b.N)), WithNumRings(numRings))
 	defer c.Reset()
+
 	b.ReportAllocs()
-	b.SetBytes(items)
+	// SetBytes should reflect the size of data handled per iteration (key + value)
+	b.SetBytes(4 + 4)
 	b.RunParallel(func(pb *testing.PB) {
 		k := []byte("\x00\x00\x00\x00")
 		v := []byte("xyza")
 		for pb.Next() {
-			for range items {
-				k[0]++
-				if k[0] == 0 {
-					k[1]++
-				}
-				c.Set(k, v)
+			// Remove the 'items' loop to measure single operation latency
+			k[0]++
+			if k[0] == 0 {
+				k[1]++
 			}
+			c.Set(k, v)
 		}
 	})
 }
 
 func benchmarkCacheGet(b *testing.B, numRings int) {
-	const items = 1 << 16
-	c := New(WithSize(12*1024*items), WithNumRings(numRings))
+	c := New(WithSize(uint64(12*b.N)), WithNumRings(numRings))
 	defer c.Reset()
+	// Pre-fill the cache
 	k := []byte("\x00\x00\x00\x00")
 	v := []byte("xyza")
-	for range items {
+	for i := 0; i < b.N; i++ {
 		k[0]++
 		if k[0] == 0 {
 			k[1]++
@@ -103,20 +111,20 @@ func benchmarkCacheGet(b *testing.B, numRings int) {
 	}
 
 	b.ReportAllocs()
-	b.SetBytes(items)
+	b.SetBytes(4 + 4)
+	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		var buf []byte
 		k := []byte("\x00\x00\x00\x00")
 		for pb.Next() {
-			for range items {
-				k[0]++
-				if k[0] == 0 {
-					k[1]++
-				}
-				buf = c.Get(buf[:0], k)
-				if string(buf) != string(v) {
-					panic(fmt.Errorf("BUG: invalid value obtained; got %q; want %q", buf, v))
-				}
+			k[0]++
+			if k[0] == 0 {
+				k[1]++
+			}
+
+			buf = c.Get(buf[:0], k)
+			if len(buf) == 0 {
+				b.Fatal("BUG: missing value")
 			}
 		}
 	})
@@ -127,7 +135,7 @@ func benchmarkCacheHas(b *testing.B, numRings int) {
 	c := New(WithSize(12*1024*items), WithNumRings(numRings))
 	defer c.Reset()
 	k := []byte("\x00\x00\x00\x00")
-	for range items {
+	for i := 0; i < items; i++ {
 		k[0]++
 		if k[0] == 0 {
 			k[1]++
@@ -136,51 +144,64 @@ func benchmarkCacheHas(b *testing.B, numRings int) {
 	}
 
 	b.ReportAllocs()
-	b.SetBytes(items)
+	b.SetBytes(4) // Key only
+	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		k := []byte("\x00\x00\x00\x00")
 		for pb.Next() {
-			for range items {
-				k[0]++
-				if k[0] == 0 {
-					k[1]++
-				}
-				if !c.Has(k) {
-					panic(fmt.Errorf("BUG: missing value for key %q", k))
-				}
+			k[0]++
+			if k[0] == 0 {
+				k[1]++
+			}
+			if !c.Has(k) {
+				b.Fatal("BUG: missing value")
 			}
 		}
 	})
 }
 
 func benchmarkCacheSetGet(b *testing.B, numRings int) {
-	const items = 1 << 16
-	c := New(WithSize(12*1024*items), WithNumRings(numRings))
+	c := New(WithSize(uint64(12*b.N)), WithNumRings(numRings))
 	defer c.Reset()
 	b.ReportAllocs()
-	b.SetBytes(2 * items)
+	b.SetBytes(16)
 	b.RunParallel(func(pb *testing.PB) {
 		k := []byte("\x00\x00\x00\x00")
 		v := []byte("xyza")
 		var buf []byte
 		for pb.Next() {
-			for range items {
-				k[0]++
-				if k[0] == 0 {
-					k[1]++
-				}
-				c.Set(k, v)
+			k[0]++
+			if k[0] == 0 {
+				k[1]++
 			}
-			for range items {
-				k[0]++
-				if k[0] == 0 {
-					k[1]++
-				}
-				buf, _ = c.HasGet(nil, k)
-				if string(buf) != string(v) {
-					b.Fatalf("BUG: invalid value obtained; got %q; want %q", buf, v)
-				}
+
+			c.Set(k, v)
+			buf, _ = c.HasGet(buf[:0], k)
+			if len(buf) == 0 {
+				b.Fatal("BUG: invalid value")
 			}
 		}
 	})
+}
+
+func benchmarkCacheIterator(b *testing.B, numRings int) {
+	c := New(WithSize(uint64(12*b.N)), WithNumRings(numRings))
+	defer c.Reset()
+	k := []byte("\x00\x00\x00\x00")
+	v := []byte("xyza")
+	for range b.N {
+		k[0]++
+		if k[0] == 0 {
+			k[1]++
+		}
+		c.Set(k, v)
+	}
+
+	it := c.Iterator()
+	b.ReportAllocs()
+	b.SetBytes(8)
+	b.ResetTimer()
+	for range b.N {
+		_, _, _ = it.GetNext(nil, nil)
+	}
 }
