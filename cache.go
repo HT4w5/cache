@@ -126,3 +126,43 @@ func (c *Cache) Reset() {
 		c.rings[i].reset()
 	}
 }
+
+// Iterator
+type Iterator struct {
+	c       *Cache
+	ringIdx int
+	ri      *ringIter
+}
+
+func (c *Cache) Iterator() *Iterator {
+	it := &Iterator{
+		c:       c,
+		ringIdx: -1,
+		ri: &ringIter{
+			r:     &ring{},
+			idxes: []uint64{}, // getNext() will return false on first call
+			i:     2,
+		},
+	}
+
+	return it
+}
+
+// GetNext() copies key and value of next KV pair into kDst[:len(key)] and
+// vDst[:len(value)] if next pair exists.
+// New slices will be allocated if is nil or not long enough.
+// Returns nil, nil, false when there are no more pairs.
+func (it *Iterator) GetNext(kDst, vDst []byte) ([]byte, []byte, bool) {
+	for {
+		if k, v, ok := it.ri.getNext(kDst, vDst); ok {
+			return k, v, true
+		} else {
+			it.ringIdx++
+			if it.ringIdx >= len(it.c.rings) { // No more rings
+				return nil, nil, false
+			}
+
+			it.ri = it.c.rings[it.ringIdx].iterator()
+		}
+	}
+}

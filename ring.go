@@ -140,7 +140,7 @@ func (r *ring) get(dst, k []byte, h uint64, copyValue bool) ([]byte, bool) {
 		if copyValue {
 			dst = dst[:0]
 			dst = append(dst, srd[idx:idx+vLen]...)
-			return dst[:vLen], true
+			return dst, true
 		} else {
 			return nil, true
 		}
@@ -214,24 +214,25 @@ type ringIter struct {
 	i     int64
 }
 
-func (it *ringIter) getNext(dst []byte) ([]byte, bool) {
+func (it *ringIter) getNext(kDst, vDst []byte) ([]byte, []byte, bool) {
+	it.r.mu.RLock()
+	defer it.r.mu.RUnlock()
+
 	for {
 		it.i++
 		if it.i >= int64(len(it.idxes)) {
-			return nil, false
+			return nil, nil, false
 		}
 
 		idx := it.idxes[it.i]
 		wrapBit := (idx >> ringIdxBits) == 1
 		idx &= (1 << ringIdxBits) - 1
 
-		it.r.mu.RLock()
 		if wrapBit == it.r.wrapBit && idx < it.r.idx || wrapBit != it.r.wrapBit && idx >= it.r.idx {
 			// Valid mapping
 			shardIdx := idx / shardSize
 			if shardIdx >= uint64(len(it.r.shards)) {
 				// Corrupt idx mapping
-				it.r.mu.RUnlock()
 				continue
 			}
 			idx %= shardSize
@@ -243,18 +244,17 @@ func (it *ringIter) getNext(dst []byte) ([]byte, bool) {
 			vLen := (uint64(src[2]) << 8) | uint64(src[3])
 			if idx+kLen+vLen+4 > shardSize {
 				// Corrupt key/value length
-				it.r.mu.RUnlock()
 				continue
 			}
 
 			idx += 4
+			kDst = kDst[:0]
+			kDst = append(kDst, srd[idx:idx+kLen]...)
 
 			idx += kLen
-			dst = dst[:0]
-			dst = append(dst, srd[idx:idx+vLen]...)
-			it.r.mu.RUnlock()
-			return dst[:vLen], true
+			vDst = vDst[:0]
+			vDst = append(vDst, srd[idx:idx+vLen]...)
+			return kDst, vDst, true
 		}
-		it.r.mu.RUnlock()
 	}
 }
