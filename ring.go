@@ -17,16 +17,17 @@ const (
 )
 
 type ring struct {
-	mu     sync.RWMutex
-	idxMap map[uint64]uint64
+	mu sync.RWMutex
+	_  [64 - 24]byte
+
 	shards [][]byte
+	idxMap map[uint64]uint64
+	size   uint64
+	_      [64 - 8 - 24 - 8]byte
 
-	// State params
-	wrapBit bool
 	idx     uint64
-
-	// Config
-	size uint64
+	wrapBit bool
+	_       [64 - 8 - 1]byte
 }
 
 func (r *ring) init(size uint64) {
@@ -221,11 +222,13 @@ func (r *ring) iterator() *ringIter {
 }
 
 type ringIter struct {
-	r        *ring
 	idxPairs []struct {
 		hash uint64
 		idx  uint64
 	}
+	r *ring
+	_ [64 - 24 - 8]byte
+
 	i int64
 }
 
