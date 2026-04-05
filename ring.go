@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"maps"
 	"sync"
+	"sync/atomic"
 
 	"github.com/zeebo/xxh3"
 )
@@ -28,6 +29,16 @@ type ring struct {
 	idx     uint64
 	wrapBit bool
 	_       [64 - 8 - 1]byte
+
+	// Statistics
+	rx          atomic.Uint64
+	tx          atomic.Uint64
+	misses      atomic.Uint64
+	wraps       atomic.Uint64
+	collisions  atomic.Uint64
+	corruptions atomic.Uint64
+	vacuums     atomic.Uint64
+	allocated   atomic.Uint64
 }
 
 func (r *ring) init(size uint64) {
@@ -54,13 +65,14 @@ func (r *ring) set(k, v []byte, h uint64) {
 	startShardIdx := startIdx / shardSize
 	endShardIdx := endIdx / shardSize
 	// Check if idx exceeds ring size
-	if endShardIdx >= uint64(len(r.shards)) { // Wrap ring
+	if endShardIdx >= uint64(len(r.shards)) && endIdx%shardSize != 0 { // Wrap ring
 		// Perform vacuum
 		r.vacuum()
 		startIdx = 0
 		startShardIdx = 0
 		endIdx = payloadSize
 		r.wrapBit = !r.wrapBit
+		r.wraps.Add(1)
 	} else if endShardIdx > startShardIdx && endIdx%shardSize != 0 {
 		// Check if payload spans across shards,
 		// excluding the case where it ends exactly at a shard boundary
@@ -87,9 +99,13 @@ func (r *ring) set(k, v []byte, h uint64) {
 	if srd == nil {
 		srd = shardPool.Get().([]byte)[:shardSize:shardSize]
 		r.shards[startShardIdx] = srd
+		r.allocated.Add(shardSize)
 	}
 	idx := startIdx % shardSize
 	writePayload(srd[idx:], k, v)
+
+	// Update statistics
+	r.rx.Add(uint64(len(k) + len(v)))
 }
 
 func writePayload(dst, k, v []byte) {
@@ -108,6 +124,7 @@ func (r *ring) get(dst, k []byte, h uint64, copyValue bool) ([]byte, bool) {
 	idx, ok := r.idxMap[h]
 	if !ok {
 		// No idx mapping
+		r.misses.Add(1)
 		return nil, false
 	}
 
@@ -119,7 +136,8 @@ func (r *ring) get(dst, k []byte, h uint64, copyValue bool) ([]byte, bool) {
 		shardIdx := idx / shardSize
 		if shardIdx >= uint64(len(r.shards)) {
 			// Corrupt idx mapping
-			r.mu.RUnlock()
+			r.corruptions.Add(1)
+			delete(r.idxMap, h)
 			return nil, false
 		}
 		idx %= shardSize
@@ -131,12 +149,16 @@ func (r *ring) get(dst, k []byte, h uint64, copyValue bool) ([]byte, bool) {
 		vLen := (uint64(src[2]) << 8) | uint64(src[3])
 		if idx+kLen+vLen+4 > shardSize {
 			// Corrupt key/value length
+			r.corruptions.Add(1)
+			delete(r.idxMap, h)
 			return nil, false
 		}
 
 		idx += 4
 		if !bytes.Equal(k, srd[idx:idx+kLen]) {
 			// Collision
+			r.collisions.Add(1)
+			delete(r.idxMap, h)
 			return nil, false
 		}
 
@@ -144,6 +166,7 @@ func (r *ring) get(dst, k []byte, h uint64, copyValue bool) ([]byte, bool) {
 		if copyValue {
 			dst = dst[:0]
 			dst = append(dst, srd[idx:idx+vLen]...)
+			r.tx.Add(vLen)
 			return dst, true
 		} else {
 			return nil, true
@@ -151,6 +174,7 @@ func (r *ring) get(dst, k []byte, h uint64, copyValue bool) ([]byte, bool) {
 	}
 
 	// Invalid mapping
+	r.misses.Add(1)
 	return nil, false
 }
 
@@ -173,6 +197,7 @@ func (r *ring) vacuum() {
 	if len(r.idxMap)*vacuumFactor <= cap {
 		// Shrink map by re-creating
 		r.idxMap = maps.Clone(r.idxMap)
+		r.vacuums.Add(1)
 	}
 }
 
@@ -182,16 +207,28 @@ func (r *ring) reset() {
 
 	for i := range len(r.shards) {
 		s := r.shards[i]
-		if s != nil && cap(s) != shardSize {
-			shardPool.Put(s)
+		if s != nil {
+			if cap(s) == shardSize {
+				shardPool.Put(s)
+			}
+			r.shards[i] = nil
 		}
-		s = nil
 	}
 
 	clear(r.idxMap)
 
 	r.wrapBit = false
 	r.idx = 0
+
+	// Reset stats
+	r.rx.Store(0)
+	r.tx.Store(0)
+	r.misses.Store(0)
+	r.wraps.Store(0)
+	r.collisions.Store(0)
+	r.corruptions.Store(0)
+	r.vacuums.Store(0)
+	r.allocated.Store(0)
 }
 
 // Iterator
@@ -239,6 +276,7 @@ func (it *ringIter) getNext(kDst, vDst []byte) ([]byte, []byte, bool) {
 	for {
 		it.i++
 		if it.i >= int64(len(it.idxPairs)) {
+			// End of iteration
 			return nil, nil, false
 		}
 
@@ -251,6 +289,7 @@ func (it *ringIter) getNext(kDst, vDst []byte) ([]byte, []byte, bool) {
 			shardIdx := idx / shardSize
 			if shardIdx >= uint64(len(it.r.shards)) {
 				// Corrupt idx mapping
+				it.r.corruptions.Add(1)
 				continue
 			}
 			idx %= shardSize
@@ -262,6 +301,7 @@ func (it *ringIter) getNext(kDst, vDst []byte) ([]byte, []byte, bool) {
 			vLen := (uint64(src[2]) << 8) | uint64(src[3])
 			if idx+kLen+vLen+4 > shardSize {
 				// Corrupt key/value length
+				it.r.corruptions.Add(1)
 				continue
 			}
 
@@ -269,6 +309,8 @@ func (it *ringIter) getNext(kDst, vDst []byte) ([]byte, []byte, bool) {
 			// Verify hash
 			if hash != xxh3.Hash(srd[idx:idx+kLen]) {
 				// Overwritten
+				// Hard to determine whether this is an overwrite or collision;
+				// Don't record
 				continue
 			}
 
@@ -278,7 +320,11 @@ func (it *ringIter) getNext(kDst, vDst []byte) ([]byte, []byte, bool) {
 			idx += kLen
 			vDst = vDst[:0]
 			vDst = append(vDst, srd[idx:idx+vLen]...)
+			it.r.tx.Add(kLen + vLen)
 			return kDst, vDst, true
 		}
+
+		// Invalid mapping
+		it.r.misses.Add(1)
 	}
 }
